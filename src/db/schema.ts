@@ -1,6 +1,19 @@
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const MIGRATIONS: Record<number, string> = {
+  2: `
+CREATE TABLE period_salary_snapshots (
+  year_month TEXT NOT NULL REFERENCES payroll_periods(year_month),
+  employee_id TEXT NOT NULL REFERENCES employees(id),
+  salary_cents INTEGER NOT NULL,
+  food_cents INTEGER NOT NULL,
+  transport_cents INTEGER NOT NULL,
+  overtime_cents INTEGER NOT NULL,
+  services_cents INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (year_month, employee_id)
+);
+`,
   1: `
 CREATE TABLE employees (
   id TEXT PRIMARY KEY,

@@ -51,6 +51,17 @@ export type FixedDeductionInput = Omit<FixedDeduction, 'id' | 'employeeId'> & { 
 
 export type PeriodStatus = 'open' | 'closed';
 
+/** Remuneração do funcionário congelada no fechamento da competência. */
+export interface SalarySnapshot {
+  period: string;
+  employeeId: string;
+  salary: number;
+  foodAllowance: number;
+  transportAllowance: number;
+  overtime: number;
+  services: number;
+}
+
 export interface PayrollPeriod {
   yearMonth: string;
   status: PeriodStatus;

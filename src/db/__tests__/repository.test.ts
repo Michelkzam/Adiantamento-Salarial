@@ -1,3 +1,4 @@
+import { MIGRATIONS } from '../schema';
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import initSqlJs from 'sql.js/dist/sql-asm.js';
 import type { Database, SqlJsStatic } from 'sql.js';
@@ -31,7 +32,7 @@ describe('schema', () => {
   it('aplica migrações e é idempotente', () => {
     repo.migrate(db);
     const v = db.exec('PRAGMA user_version')[0].values[0][0];
-    expect(v).toBe(1);
+    expect(v).toBe(2);
   });
 });
 
@@ -192,5 +193,31 @@ describe('importação em competência fechada', () => {
     });
     expect(res.skippedClosed).toBe(1);
     expect(res.advances).toBe(0);
+  });
+});
+
+describe('remuneração congelada no fechamento', () => {
+  it('mantém o salário da época em competência fechada e libera ao reabrir', () => {
+    const e = repo.createEmployee(db, base, [pension()]);
+    repo.ensurePeriod(db, '2026-01');
+    repo.createAdvance(db, e.id, { amount: 500, time: '09:00', period: '2026-01' });
+    repo.closePeriod(db, '2026-01');
+    repo.updateEmployee(db, e.id, { ...base, salary: 4000 });
+    const now = repo.getEmployee(db, e.id)!;
+    expect(repo.employeeForPeriod(db, now, '2026-01').salary).toBe(2000);
+    expect(repo.periodUsage(db, now, '2026-01').remainingCents).toBe(250000 - 50000 - 60000);
+    expect(repo.listSalarySnapshots(db)).toHaveLength(1);
+    repo.reopenPeriod(db, '2026-01');
+    expect(repo.employeeForPeriod(db, now, '2026-01').salary).toBe(4000);
+    expect(repo.listSalarySnapshots(db)).toHaveLength(0);
+  });
+
+  it('migra bancos da versão 1 para a 2', () => {
+    const v1 = new SQL.Database();
+    v1.exec(MIGRATIONS[1]);
+    v1.exec('PRAGMA user_version = 1');
+    repo.migrate(v1);
+    expect(Number(v1.exec('PRAGMA user_version')[0].values[0][0])).toBe(2);
+    expect(v1.exec("SELECT name FROM sqlite_master WHERE name = 'period_salary_snapshots'")).toHaveLength(1);
   });
 });

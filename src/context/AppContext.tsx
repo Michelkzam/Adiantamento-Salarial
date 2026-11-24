@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react';
 import type {
   Employee, AdvanceRecord, EmployeeInput, AdvanceInput, FixedDeduction, FixedDeductionInput,
-  PayrollPeriod, AuditEntry,
+  PayrollPeriod, AuditEntry, SalarySnapshot,
 } from '../types';
 import { AppDatabase, openDatabase } from '../db/database';
 import * as repo from '../db/repository';
@@ -10,6 +10,7 @@ import { periodOf } from '../utils/period';
 interface AppState {
   employees: Employee[];
   advances: AdvanceRecord[];
+  salarySnapshots: SalarySnapshot[];
   fixedDeductions: FixedDeduction[];
   periods: PayrollPeriod[];
   isLoading: boolean;
@@ -37,13 +38,15 @@ interface AppContextValue extends AppState {
   getEmployeeById: (id: string) => Employee | undefined;
   getEmployeeAdvances: (employeeId: string) => AdvanceRecord[];
   getEmployeeFixedDeductions: (employeeId: string) => FixedDeduction[];
+  /** Funcionário com a remuneração congelada da competência, se ela foi fechada. */
+  getEmployeeForPeriod: (employee: Employee, period: string) => Employee;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>({
-    employees: [], advances: [], fixedDeductions: [], periods: [], isLoading: true, loadError: null,
+    employees: [], advances: [], salarySnapshots: [], fixedDeductions: [], periods: [], isLoading: true, loadError: null,
   });
   const [selectedPeriod, setSelectedPeriodState] = useState(periodOf());
   const dbRef = useRef<AppDatabase | null>(null);
@@ -57,6 +60,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       advances: repo.listAdvances(db),
       fixedDeductions: repo.listFixedDeductions(db),
       periods: repo.listPeriods(db),
+      salarySnapshots: repo.listSalarySnapshots(db),
     }));
   }, []);
 
@@ -211,6 +215,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [state.fixedDeductions],
   );
 
+  const getEmployeeForPeriod = useCallback((employee: Employee, period: string): Employee => {
+    const snap = state.salarySnapshots.find((s) => s.period === period && s.employeeId === employee.id);
+    if (!snap) return employee;
+    const { salary, foodAllowance, transportAllowance, overtime, services } = snap;
+    return { ...employee, salary, foodAllowance, transportAllowance, overtime, services };
+  }, [state.salarySnapshots]);
+
   const value: AppContextValue = {
     ...state,
     selectedPeriod, setSelectedPeriod, isPeriodClosed,
@@ -218,7 +229,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     addAdvance, deleteAdvance, markAdvanceDeducted,
     closePeriod, reopenPeriod,
     importData, exportData, backupDatabase, restoreDatabase, getAuditLog,
-    getEmployeeById, getEmployeeAdvances, getEmployeeFixedDeductions,
+    getEmployeeById, getEmployeeAdvances, getEmployeeFixedDeductions, getEmployeeForPeriod,
   };
 
   if (state.loadError) {
