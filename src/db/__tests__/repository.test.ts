@@ -128,7 +128,7 @@ describe('migração do localStorage', () => {
         { id: 'a2', employeeId: 'e1', employeeName: 'João', amount: 100, date: '2026-03-11T13:00:00.000Z', time: '10:00', status: 'deducted' },
       ],
     });
-    expect(migrateLegacyData(db, legacy)).toEqual({ employees: 1, advances: 2 });
+    expect(migrateLegacyData(db, legacy)).toEqual({ employees: 1, advances: 2, skippedClosed: 0 });
     expect(migrateLegacyData(db, legacy)).toBeNull();
     const advances = repo.listAdvances(db);
     expect(advances).toHaveLength(2);
@@ -178,5 +178,19 @@ describe('importação Excel recalcula pensão', () => {
     repo.replaceWithImported(db, { employees: [{ ...repo.getEmployee(db, e.id)!, salary: 3000 }], advances: [] });
     const fixed = repo.listAdvances(db).filter((a) => a.source === 'fixed' && a.period === '2026-01');
     expect(fixed.map((a) => a.amount)).toEqual([900]);
+  });
+});
+
+describe('importação em competência fechada', () => {
+  it('informa quantos lançamentos foram ignorados', () => {
+    const e = repo.createEmployee(db, base);
+    repo.ensurePeriod(db, '2026-01');
+    repo.closePeriod(db, '2026-01');
+    const res = repo.replaceWithImported(db, {
+      employees: [repo.getEmployee(db, e.id)!],
+      advances: [{ employeeId: e.id, amount: 10, date: '2026-01-15T12:00:00.000Z', period: '2026-01' }],
+    });
+    expect(res.skippedClosed).toBe(1);
+    expect(res.advances).toBe(0);
   });
 });

@@ -29,7 +29,7 @@ interface AppContextValue extends AppState {
   markAdvanceDeducted: (id: string) => Promise<void>;
   closePeriod: (period: string) => Promise<number>;
   reopenPeriod: (period: string) => Promise<void>;
-  importData: (employees: Employee[], advances: AdvanceRecord[]) => Promise<void>;
+  importData: (employees: Employee[], advances: AdvanceRecord[]) => Promise<repo.ImportResult>;
   exportData: () => Promise<{ employees: Employee[]; advances: AdvanceRecord[] }>;
   backupDatabase: () => Promise<string | null>;
   restoreDatabase: () => Promise<boolean>;
@@ -137,7 +137,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [write]);
 
   const importData = useCallback(async (employees: Employee[], advances: AdvanceRecord[]) => {
-    await write((db) => repo.replaceWithImported(db, { employees, advances }));
+    return write<repo.ImportResult>((db) => repo.replaceWithImported(db, { employees, advances }));
   }, [write]);
 
   const exportData = useCallback(async () => ({ employees: state.employees, advances: state.advances }),

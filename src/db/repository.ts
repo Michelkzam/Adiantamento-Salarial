@@ -462,9 +462,17 @@ export interface ImportPayload {
 }
 
 /** Insere dados sem descartar registros. Usado na migração do localStorage e na importação Excel. */
-export function insertImported(db: Database, payload: ImportPayload, action: string, summary: string): { employees: number; advances: number } {
+export interface ImportResult {
+  employees: number;
+  advances: number;
+  /** Adiantamentos ignorados por pertencerem a competências fechadas. */
+  skippedClosed: number;
+}
+
+export function insertImported(db: Database, payload: ImportPayload, action: string, summary: string): ImportResult {
   let nEmp = 0;
   let nAdv = 0;
+  let skippedClosed = 0;
   for (const e of payload.employees) {
     if (!e.name) continue;
     const id = e.id ? String(e.id) : generateId();
@@ -489,7 +497,10 @@ export function insertImported(db: Database, payload: ImportPayload, action: str
     if (one(db, 'SELECT 1 AS x FROM advances WHERE id = ?', [id])) continue;
     const date = a.date ? new Date(a.date).toISOString() : now();
     const period = a.period && isValidPeriod(a.period) ? a.period : periodOf(date);
-    if (insertPeriodIfMissing(db, period).status === 'closed') continue;
+    if (insertPeriodIfMissing(db, period).status === 'closed') {
+      skippedClosed++;
+      continue;
+    }
     run(db,
       `INSERT INTO advances(id, employee_id, employee_name, period, amount_cents, date, time, notes, status, source, created_at)
        VALUES(?,?,?,?,?,?,?,?,?, 'manual', ?)`,
@@ -498,12 +509,13 @@ export function insertImported(db: Database, payload: ImportPayload, action: str
         a.status === 'deducted' ? 'deducted' : 'pending', now()]);
     nAdv++;
   }
-  audit(db, action, 'database', null, `${summary}: ${nEmp} funcionário(s), ${nAdv} adiantamento(s)`);
-  return { employees: nEmp, advances: nAdv };
+  const skippedText = skippedClosed ? `, ${skippedClosed} ignorado(s) por competência fechada` : '';
+  audit(db, action, 'database', null, `${summary}: ${nEmp} funcionário(s), ${nAdv} adiantamento(s)${skippedText}`);
+  return { employees: nEmp, advances: nAdv, skippedClosed };
 }
 
 /** Substitui os dados (importação Excel). Registros atuais são excluídos logicamente, nunca apagados. */
-export function replaceWithImported(db: Database, payload: ImportPayload): { employees: number; advances: number } {
+export function replaceWithImported(db: Database, payload: ImportPayload): ImportResult {
   const ts = now();
   run(db,
     `UPDATE advances SET deleted_at = ? WHERE deleted_at IS NULL AND source = 'manual'
