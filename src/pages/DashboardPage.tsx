@@ -66,12 +66,14 @@ export function DashboardPage() {
 
   const handleSave = async (data: EmployeeInput, fixed: FixedDeductionInput[]) => {
     try {
-      if (editingEmployee) {
-        await updateEmployee(editingEmployee, data, fixed);
-        showToast('Funcionário atualizado com sucesso!');
+      const over = editingEmployee ? await updateEmployee(editingEmployee, data, fixed) : await addEmployee(data, fixed);
+      if (over.length > 0) {
+        showToast(
+          `Salvo, mas atenção: em ${over.map(formatPeriod).join(', ')} os adiantamentos de ${data.name} (avulsos + fixos) passam da remuneração. O saldo ficará negativo.`,
+          'warning',
+        );
       } else {
-        await addEmployee(data, fixed);
-        showToast('Funcionário cadastrado com sucesso!');
+        showToast(editingEmployee ? 'Funcionário atualizado com sucesso!' : 'Funcionário cadastrado com sucesso!');
       }
       setShowForm(false);
       setEditingEmployee(null);

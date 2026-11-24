@@ -236,6 +236,14 @@ export function EmployeeDetailPage() {
             <Plus size={20} />
             <span>{periodClosed ? 'Competência fechada' : canAdvance ? `Inserir Valor (disponível ${formatBRL(summary.maxAdvance)})` : 'Saldo Esgotado'}</span>
           </button>
+          {remainingBalance < 0 && (
+            <div role="alert" className="flex items-start space-x-2 mt-3 p-3 rounded-lg border border-red-300 bg-red-50 text-red-700 dark:bg-red-900/30 dark:border-red-700 dark:text-red-300 text-sm">
+              <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" />
+              <span>
+                Atenção: em {formatPeriod(selectedPeriod)} os adiantamentos (avulsos {formatBRL(summary.manual)} + fixos {formatBRL(summary.fixed)}) passam da remuneração em {formatBRL(Math.abs(remainingBalance))}. Revise os lançamentos ou o valor da pensão.
+              </span>
+            </div>
+          )}
           {summary.fixed > 0 && (
             <p className="text-xs text-purple-700 dark:text-purple-300 text-center mt-2">
               Adiantamentos fixos (pensão) no mês: {formatBRL(summary.fixed)} — não entram no limite de 60%.

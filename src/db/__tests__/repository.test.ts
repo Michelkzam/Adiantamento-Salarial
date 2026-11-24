@@ -156,3 +156,17 @@ describe('importação Excel (substituição)', () => {
     expect(after.filter((a) => a.period === '2026-01' && a.source === 'manual')).toHaveLength(1);
   });
 });
+
+describe('pensão acima da remuneração', () => {
+  it('salva e informa as competências abertas com saldo negativo', () => {
+    const e = repo.createEmployee(db, base);
+    repo.ensurePeriod(db, '2026-01');
+    repo.createAdvance(db, e.id, { amount: 1500, time: '09:00', period: '2026-01' });
+    expect(repo.overcommittedPeriods(db, e.id)).toEqual([]);
+    repo.updateEmployee(db, e.id, base, [pension({ mode: 'fixed', value: 1500 })]);
+    expect(repo.overcommittedPeriods(db, e.id)).toEqual(['2026-01']);
+    expect(repo.periodUsage(db, repo.getEmployee(db, e.id)!, '2026-01').remainingCents).toBe(-50000);
+    repo.closePeriod(db, '2026-01');
+    expect(repo.overcommittedPeriods(db, e.id)).toEqual([]);
+  });
+});

@@ -207,6 +207,18 @@ export function periodUsage(db: Database, employee: Employee, period: string): P
   return { totalCents, manualCents, fixedCents, remainingCents, maxManualCents };
 }
 
+/** Competências abertas em que avulsos + fixos ultrapassam a remuneração do funcionário. */
+export function overcommittedPeriods(db: Database, employeeId: string): string[] {
+  const employee = getEmployee(db, employeeId);
+  if (!employee) return [];
+  return all(db,
+    `SELECT DISTINCT a.period FROM advances a JOIN payroll_periods p ON p.year_month = a.period
+     WHERE a.employee_id = ? AND a.deleted_at IS NULL AND p.status = 'open' ORDER BY a.period`,
+    [employeeId])
+    .map((r) => String(r.period))
+    .filter((period) => periodUsage(db, employee, period).remainingCents < 0);
+}
+
 /* ---------- competências ---------- */
 
 export function getPeriod(db: Database, period: string): PayrollPeriod | undefined {

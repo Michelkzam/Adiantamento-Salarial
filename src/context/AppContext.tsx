@@ -20,8 +20,9 @@ interface AppContextValue extends AppState {
   selectedPeriod: string;
   setSelectedPeriod: (period: string) => void;
   isPeriodClosed: (period: string) => boolean;
-  addEmployee: (data: EmployeeInput, fixed?: FixedDeductionInput[]) => Promise<void>;
-  updateEmployee: (id: string, data: EmployeeInput, fixed?: FixedDeductionInput[]) => Promise<void>;
+  /** Retorna as competências abertas em que o total lançado passou da remuneração. */
+  addEmployee: (data: EmployeeInput, fixed?: FixedDeductionInput[]) => Promise<string[]>;
+  updateEmployee: (id: string, data: EmployeeInput, fixed?: FixedDeductionInput[]) => Promise<string[]>;
   deleteEmployee: (id: string) => Promise<void>;
   addAdvance: (employeeId: string, data: AdvanceInput) => Promise<void>;
   deleteAdvance: (id: string) => Promise<void>;
@@ -100,11 +101,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const addEmployee = useCallback(async (data: EmployeeInput, fixed: FixedDeductionInput[] = []) => {
-    await write((db) => repo.createEmployee(db, data, fixed));
+    return write<string[]>((db) => repo.overcommittedPeriods(db, repo.createEmployee(db, data, fixed).id));
   }, [write]);
 
   const updateEmployee = useCallback(async (id: string, data: EmployeeInput, fixed?: FixedDeductionInput[]) => {
-    await write((db) => repo.updateEmployee(db, id, data, fixed));
+    return write<string[]>((db) => {
+      repo.updateEmployee(db, id, data, fixed);
+      return repo.overcommittedPeriods(db, id);
+    });
   }, [write]);
 
   const deleteEmployee = useCallback(async (id: string) => {
