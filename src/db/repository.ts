@@ -477,7 +477,7 @@ export function insertImported(db: Database, payload: ImportPayload, action: str
     if (one(db, 'SELECT 1 AS x FROM advances WHERE id = ?', [id])) continue;
     const date = a.date ? new Date(a.date).toISOString() : now();
     const period = a.period && isValidPeriod(a.period) ? a.period : periodOf(date);
-    insertPeriodIfMissing(db, period);
+    if (insertPeriodIfMissing(db, period).status === 'closed') continue;
     run(db,
       `INSERT INTO advances(id, employee_id, employee_name, period, amount_cents, date, time, notes, status, source, created_at)
        VALUES(?,?,?,?,?,?,?,?,?, 'manual', ?)`,
@@ -493,7 +493,9 @@ export function insertImported(db: Database, payload: ImportPayload, action: str
 /** Substitui os dados (importação Excel). Registros atuais são excluídos logicamente, nunca apagados. */
 export function replaceWithImported(db: Database, payload: ImportPayload): { employees: number; advances: number } {
   const ts = now();
-  run(db, 'UPDATE advances SET deleted_at = ? WHERE deleted_at IS NULL', [ts]);
+  run(db,
+    `UPDATE advances SET deleted_at = ? WHERE deleted_at IS NULL AND source = 'manual'
+       AND period NOT IN (SELECT year_month FROM payroll_periods WHERE status = 'closed')`, [ts]);
   run(db, 'UPDATE employees SET deleted_at = ? WHERE deleted_at IS NULL', [ts]);
   for (const e of payload.employees) {
     if (!e.id || !e.name || !one(db, 'SELECT 1 AS x FROM employees WHERE id = ?', [String(e.id)])) continue;
@@ -508,7 +510,9 @@ export function replaceWithImported(db: Database, payload: ImportPayload): { emp
   }
   for (const a of payload.advances) {
     const amount = toCents(Number(a.amount));
-    if (!a.id || amount <= 0 || !one(db, 'SELECT 1 AS x FROM advances WHERE id = ?', [String(a.id)])) continue;
+    if (!a.id || amount <= 0) continue;
+    const existing = one(db, 'SELECT period, source FROM advances WHERE id = ?', [String(a.id)]);
+    if (!existing || existing.source !== 'manual' || getPeriod(db, String(existing.period))?.status === 'closed') continue;
     run(db, 'UPDATE advances SET amount_cents=?, status=?, notes=?, deleted_at=NULL, updated_at=? WHERE id=?',
       [amount, a.status === 'deducted' ? 'deducted' : 'pending', a.notes ? String(a.notes) : null, ts, String(a.id)]);
   }

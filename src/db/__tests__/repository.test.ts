@@ -136,3 +136,23 @@ describe('migração do localStorage', () => {
     expect(repo.listEmployees(db)[0].salary).toBe(1500.1);
   });
 });
+
+describe('importação Excel (substituição)', () => {
+  it('preserva pensão e meses fechados', () => {
+    const e = repo.createEmployee(db, base, [pension()]);
+    repo.ensurePeriod(db, '2026-01');
+    repo.ensurePeriod(db, '2026-02');
+    const closedAdv = repo.createAdvance(db, e.id, { amount: 100, time: '09:00', period: '2026-01' });
+    repo.closePeriod(db, '2026-01');
+    const manual = repo.listAdvances(db).filter((a) => a.source === 'manual');
+    repo.replaceWithImported(db, {
+      employees: repo.listEmployees(db),
+      advances: [...manual.map((a) => ({ ...a, amount: 50 })), { employeeId: e.id, amount: 10, date: '2026-01-15T12:00:00.000Z', period: '2026-01' }],
+    });
+    repo.ensurePeriod(db, '2026-02');
+    const after = repo.listAdvances(db);
+    expect(after.filter((a) => a.source === 'fixed').map((a) => a.period).sort()).toEqual(['2026-01', '2026-02']);
+    expect(after.find((a) => a.id === closedAdv.id)?.amount).toBe(100);
+    expect(after.filter((a) => a.period === '2026-01' && a.source === 'manual')).toHaveLength(1);
+  });
+});
