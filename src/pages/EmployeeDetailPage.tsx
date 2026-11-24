@@ -19,7 +19,7 @@ import { AdvanceRecord } from '../types';
 export function EmployeeDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getEmployeeById, getEmployeeAdvances, addAdvance, deleteAdvance, markAdvanceDeducted, selectedPeriod, isPeriodClosed } = useApp();
+  const { getEmployeeById, getEmployeeAdvances, addAdvance, deleteAdvance, markAdvanceDeducted, selectedPeriod, isPeriodClosed, getEmployeeForPeriod } = useApp();
   const { showToast } = useToast();
 
   const [showAdvanceForm, setShowAdvanceForm] = useState(false);
@@ -37,7 +37,11 @@ export function EmployeeDetailPage() {
     time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
   });
 
-  const employee = getEmployeeById(id || '');
+  const currentEmployee = getEmployeeById(id || '');
+  const employee = useMemo(
+    () => (currentEmployee ? getEmployeeForPeriod(currentEmployee, selectedPeriod) : undefined),
+    [currentEmployee, getEmployeeForPeriod, selectedPeriod]
+  );
   const allAdvances = useMemo(
     () => (employee ? getEmployeeAdvances(employee.id).filter((a) => a.period === selectedPeriod) : []),
     [employee, getEmployeeAdvances, selectedPeriod]
@@ -165,6 +169,11 @@ export function EmployeeDetailPage() {
               <DollarSign size={18} className="text-blue-600" />
               <span>Composição Salarial</span>
             </h4>
+            {periodClosed && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 -mt-2 mb-3">
+                Valores congelados no fechamento de {formatPeriod(selectedPeriod)}.
+              </p>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
               <SalaryItem icon={<DollarSign size={16} className="text-blue-600" />} label="Salário Base" value={employee.salary} />
               {employee.foodAllowance > 0 && <SalaryItem icon={<Utensils size={16} className="text-green-600" />} label="Vale Alimentação" value={employee.foodAllowance} />}

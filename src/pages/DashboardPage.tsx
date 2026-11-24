@@ -25,6 +25,7 @@ export function DashboardPage() {
     advances: allAdvances,
     selectedPeriod,
     getEmployeeFixedDeductions,
+    getEmployeeForPeriod,
     isLoading,
     addEmployee,
     updateEmployee,
@@ -53,14 +54,19 @@ export function DashboardPage() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  const filteredEmployees = employees.filter(
+  const periodEmployees = useMemo(
+    () => employees.map((e) => getEmployeeForPeriod(e, selectedPeriod)),
+    [employees, getEmployeeForPeriod, selectedPeriod]
+  );
+
+  const filteredEmployees = periodEmployees.filter(
     (emp) =>
       emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       emp.position.toLowerCase().includes(searchTerm.toLowerCase()) ||
       emp.department.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const totalRemainingBalance = employees.reduce((total, emp) => {
+  const totalRemainingBalance = periodEmployees.reduce((total, emp) => {
     return total + getTotalSalary(emp) - sumEmployeeAdvances(advances, emp.id);
   }, 0);
 
@@ -576,7 +582,7 @@ export function DashboardPage() {
 
       {showReportFilter && (
         <ReportFilterModal
-          employees={employees}
+          employees={periodEmployees}
           onGenerate={handleGenerateSelectedReport}
           onCancel={() => setShowReportFilter(false)}
         />

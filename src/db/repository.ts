@@ -1,7 +1,7 @@
 import type { Database, SqlValue } from 'sql.js';
 import {
   Employee, EmployeeInput, AdvanceRecord, AdvanceInput, FixedDeduction, FixedDeductionInput,
-  PayrollPeriod, AuditEntry, AdvanceStatus,
+  PayrollPeriod, AuditEntry, AdvanceStatus, SalarySnapshot,
 } from '../types';
 import { MIGRATIONS, SCHEMA_VERSION } from './schema';
 import { toCents, fromCents, percentToBasisPoints, basisPointsToPercent } from '../utils/money';
@@ -193,7 +193,34 @@ export interface PeriodUsage {
   maxManualCents: number;
 }
 
-export function periodUsage(db: Database, employee: Employee, period: string): PeriodUsage {
+export function listSalarySnapshots(db: Database): SalarySnapshot[] {
+  return all(db, 'SELECT * FROM period_salary_snapshots').map((r) => ({
+    period: String(r.year_month),
+    employeeId: String(r.employee_id),
+    salary: fromCents(Number(r.salary_cents)),
+    foodAllowance: fromCents(Number(r.food_cents)),
+    transportAllowance: fromCents(Number(r.transport_cents)),
+    overtime: fromCents(Number(r.overtime_cents)),
+    services: fromCents(Number(r.services_cents)),
+  }));
+}
+
+/** Funcionário com a remuneração da competência (congelada se a competência foi fechada). */
+export function employeeForPeriod(db: Database, employee: Employee, period: string): Employee {
+  const r = one(db, 'SELECT * FROM period_salary_snapshots WHERE year_month = ? AND employee_id = ?', [period, employee.id]);
+  if (!r) return employee;
+  return {
+    ...employee,
+    salary: fromCents(Number(r.salary_cents)),
+    foodAllowance: fromCents(Number(r.food_cents)),
+    transportAllowance: fromCents(Number(r.transport_cents)),
+    overtime: fromCents(Number(r.overtime_cents)),
+    services: fromCents(Number(r.services_cents)),
+  };
+}
+
+export function periodUsage(db: Database, current: Employee, period: string): PeriodUsage {
+  const employee = employeeForPeriod(db, current, period);
   const r = one(db,
     `SELECT COALESCE(SUM(CASE WHEN source = 'manual' THEN amount_cents END), 0) AS manual,
             COALESCE(SUM(CASE WHEN source = 'fixed' THEN amount_cents END), 0) AS fixed
@@ -307,6 +334,13 @@ export function closePeriod(db: Database, period: string): number {
     "SELECT COUNT(*) AS n FROM advances WHERE period = ? AND status = 'pending' AND deleted_at IS NULL", [period])?.n ?? 0);
   run(db, "UPDATE advances SET status = 'deducted', updated_at = ? WHERE period = ? AND status = 'pending' AND deleted_at IS NULL", [now(), period]);
   run(db, "UPDATE payroll_periods SET status = 'closed', closed_at = ? WHERE year_month = ?", [now(), period]);
+  run(db,
+    `INSERT OR REPLACE INTO period_salary_snapshots
+       (year_month, employee_id, salary_cents, food_cents, transport_cents, overtime_cents, services_cents, created_at)
+     SELECT ?, id, salary_cents, food_cents, transport_cents, overtime_cents, services_cents, ?
+     FROM employees
+     WHERE deleted_at IS NULL OR id IN (SELECT employee_id FROM advances WHERE period = ? AND deleted_at IS NULL)`,
+    [period, now(), period]);
   audit(db, 'period.close', 'period', period, `Competência ${formatPeriod(period)} fechada (${pending} adiantamento(s) descontado(s))`);
   return pending;
 }
@@ -315,6 +349,7 @@ export function reopenPeriod(db: Database, period: string): void {
   const p = getPeriod(db, period);
   if (!p || p.status === 'open') throw new BusinessError(`A competência ${formatPeriod(period)} já está aberta.`);
   run(db, "UPDATE payroll_periods SET status = 'open', closed_at = NULL WHERE year_month = ?", [period]);
+  run(db, 'DELETE FROM period_salary_snapshots WHERE year_month = ?', [period]);
   audit(db, 'period.reopen', 'period', period, `Competência ${formatPeriod(period)} reaberta`);
 }
 
