@@ -7,6 +7,8 @@ import { formatBRL } from '../utils/currency';
 interface AdvanceFormProps {
   employee: Employee;
   currentAdvances: number;
+  maxAdvance: number;
+  period: string;
   onSave: (amount: number, notes: string | undefined, date: string, time: string) => Promise<void>;
   onCancel: () => void;
 }
@@ -14,6 +16,8 @@ interface AdvanceFormProps {
 export const AdvanceForm: React.FC<AdvanceFormProps> = ({
   employee,
   currentAdvances,
+  maxAdvance,
+  period,
   onSave,
   onCancel,
 }) => {
@@ -23,7 +27,8 @@ export const AdvanceForm: React.FC<AdvanceFormProps> = ({
     const now = new Date();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const day = String(now.getDate()).padStart(2, '0');
-    return `${now.getFullYear()}-${month}-${day}`;
+    const today = `${now.getFullYear()}-${month}-${day}`;
+    return today.startsWith(period) ? today : `${period}-01`;
   });
   const [time, setTime] = useState(() =>
     new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
@@ -33,7 +38,9 @@ export const AdvanceForm: React.FC<AdvanceFormProps> = ({
 
   const totalSalary = getTotalSalary(employee);
   const remainingBalance = totalSalary - currentAdvances;
-  const maxAdvance = Math.min(totalSalary * 0.6, remainingBalance);
+  const [periodYear, periodMonth] = period.split('-').map(Number);
+  const minDate = `${period}-01`;
+  const maxDate = `${period}-${String(new Date(periodYear, periodMonth, 0).getDate()).padStart(2, '0')}`;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,6 +51,9 @@ export const AdvanceForm: React.FC<AdvanceFormProps> = ({
       const advanceAmount = parseFloat(amount);
       if (amount && advanceAmount > 0 && advanceAmount <= maxAdvance && date && time) {
         await onSave(advanceAmount, notes || undefined, date, time);
+      } else {
+        submittingRef.current = false;
+        setIsSubmitting(false);
       }
     } catch {
       submittingRef.current = false;
@@ -178,6 +188,8 @@ export const AdvanceForm: React.FC<AdvanceFormProps> = ({
                 <input
                   id="advance-date"
                   type="date"
+                  min={minDate}
+                  max={maxDate}
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
                   className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 transition-all duration-200 [color-scheme:light] dark:[color-scheme:dark]"

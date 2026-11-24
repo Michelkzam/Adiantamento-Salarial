@@ -11,16 +11,20 @@ import { BarChart, PieChart } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { SkeletonStatCard, SkeletonTableRow } from '../components/Skeleton';
 import { COMPANY } from '../config/company';
-import { getTotalSalary, getRemainingBalance, getEmployeeAdvances } from '../utils/salary';
+import { getTotalSalary, sumEmployeeAdvances } from '../utils/salary';
+import { PeriodBar } from '../components/PeriodBar';
+import { formatPeriod } from '../utils/period';
 import { formatBRL } from '../utils/currency';
 import { generateAllEmployeesReportPDF } from '../utils/pdfGenerator';
-import { Employee, EmployeeInput } from '../types';
+import { Employee, EmployeeInput, FixedDeductionInput } from '../types';
 
 export function DashboardPage() {
   const navigate = useNavigate();
   const {
     employees,
-    advances,
+    advances: allAdvances,
+    selectedPeriod,
+    getEmployeeFixedDeductions,
     isLoading,
     addEmployee,
     updateEmployee,
@@ -28,6 +32,10 @@ export function DashboardPage() {
     importData,
   } = useApp();
   const { showToast } = useToast();
+  const advances = useMemo(
+    () => allAdvances.filter((a) => a.period === selectedPeriod),
+    [allAdvances, selectedPeriod]
+  );
 
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -53,25 +61,33 @@ export function DashboardPage() {
   );
 
   const totalRemainingBalance = employees.reduce((total, emp) => {
-    return total + getRemainingBalance(emp, advances);
+    return total + getTotalSalary(emp) - sumEmployeeAdvances(advances, emp.id);
   }, 0);
 
-  const handleSave = async (data: EmployeeInput) => {
-    if (editingEmployee) {
-      await updateEmployee(editingEmployee, data);
-      showToast('Funcionário atualizado com sucesso!');
-    } else {
-      await addEmployee(data);
-      showToast('Funcionário cadastrado com sucesso!');
+  const handleSave = async (data: EmployeeInput, fixed: FixedDeductionInput[]) => {
+    try {
+      if (editingEmployee) {
+        await updateEmployee(editingEmployee, data, fixed);
+        showToast('Funcionário atualizado com sucesso!');
+      } else {
+        await addEmployee(data, fixed);
+        showToast('Funcionário cadastrado com sucesso!');
+      }
+      setShowForm(false);
+      setEditingEmployee(null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), 'error');
     }
-    setShowForm(false);
-    setEditingEmployee(null);
   };
 
   const handleDelete = async (id: string) => {
-    if (window.confirm('Tem certeza que deseja excluir este funcionário?')) {
-      await deleteEmployee(id);
-      showToast('Funcionário excluído.', 'warning');
+    if (window.confirm('Tem certeza que deseja excluir este funcionário? O histórico de adiantamentos será preservado na auditoria.')) {
+      try {
+        await deleteEmployee(id);
+        showToast('Funcionário excluído.', 'warning');
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : String(e), 'error');
+      }
     }
   };
 
@@ -100,7 +116,7 @@ export function DashboardPage() {
   const chartDataByDepartment = useMemo(() => {
     const deptMap: Record<string, number> = {};
     employees.forEach((emp) => {
-      const empAdvances = advances.filter((a) => a.employeeId === emp.id && a.status !== 'deducted');
+      const empAdvances = advances.filter((a) => a.employeeId === emp.id);
       const total = empAdvances.reduce((sum, a) => sum + a.amount, 0);
       if (total > 0) {
         deptMap[emp.department] = (deptMap[emp.department] || 0) + total;
@@ -128,6 +144,7 @@ export function DashboardPage() {
       <Header title="Adiantamento Salarial" />
 
       <div className="container mx-auto px-4 py-6">
+        <PeriodBar />
         {/* Company Info */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-6 mb-6 animate-fade-in">
           <div className="flex items-center justify-center space-x-4">
@@ -194,13 +211,13 @@ export function DashboardPage() {
               <StatCard
                 icon={<Plus className="text-green-600" size={24} />}
                 iconBg="bg-green-100 dark:bg-green-900"
-                label="Adiantamentos"
+                label={`Adiantamentos (${formatPeriod(selectedPeriod)})`}
                 value={advances.length.toString()}
               />
               <StatCard
                 icon={<TrendingDown className="text-red-600" size={24} />}
                 iconBg="bg-red-100 dark:bg-red-900"
-                label="Total Adiantado"
+                label="Total Adiantado no Mês"
                 value={formatBRL(
                   advances.reduce((sum, adv) => sum + adv.amount, 0)
                 )}
@@ -244,7 +261,7 @@ export function DashboardPage() {
         {/* Import/Export */}
         <ImportExportButtons
           employees={employees}
-          advances={advances}
+          advances={allAdvances}
           onImportData={importData}
         />
 
@@ -342,7 +359,7 @@ export function DashboardPage() {
                         .sort((a, b) => a.name.localeCompare(b.name))
                         .map((employee) => {
                           const totalSalary = getTotalSalary(employee);
-                          const employeeAdvanceTotal = getEmployeeAdvances(advances, employee.id);
+                          const employeeAdvanceTotal = sumEmployeeAdvances(advances, employee.id);
 
                           return (
                             <tr
@@ -426,7 +443,7 @@ export function DashboardPage() {
                         <td className="px-4 py-3 text-right text-purple-600 dark:text-purple-400">{formatBRL(filteredEmployees.reduce((sum, emp) => sum + emp.transportAllowance, 0))}</td>
                         <td className="px-4 py-3 text-right text-orange-600 dark:text-orange-400">{formatBRL(filteredEmployees.reduce((sum, emp) => sum + emp.overtime, 0))}</td>
                         <td className="px-4 py-3 text-right text-indigo-600 dark:text-indigo-400">{formatBRL(filteredEmployees.reduce((sum, emp) => sum + emp.services, 0))}</td>
-                        <td className="px-4 py-3 text-right text-red-600 dark:text-red-400">{formatBRL(filteredEmployees.reduce((sum, emp) => sum + getEmployeeAdvances(advances, emp.id), 0))}</td>
+                        <td className="px-4 py-3 text-right text-red-600 dark:text-red-400">{formatBRL(filteredEmployees.reduce((sum, emp) => sum + sumEmployeeAdvances(advances, emp.id), 0))}</td>
                         <td className="px-4 py-3 text-right">{formatBRL(filteredEmployees.reduce((sum, emp) => sum + getTotalSalary(emp), 0))}</td>
                         <td className="px-4 py-3"></td>
                         <td className="px-4 py-3"></td>
@@ -442,7 +459,7 @@ export function DashboardPage() {
                   .sort((a, b) => a.name.localeCompare(b.name))
                   .map((employee) => {
                     const totalSalary = getTotalSalary(employee);
-                    const employeeAdvanceTotal = getEmployeeAdvances(advances, employee.id);
+                    const employeeAdvanceTotal = sumEmployeeAdvances(advances, employee.id);
 
                     return (
                       <div
@@ -546,6 +563,7 @@ export function DashboardPage() {
       {showForm && (
         <EmployeeForm
           employee={editingData}
+          fixedDeductions={editingData ? getEmployeeFixedDeductions(editingData.id) : []}
           onSave={handleSave}
           onCancel={() => {
             setShowForm(false);

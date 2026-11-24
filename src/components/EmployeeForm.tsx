@@ -1,16 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Save, User } from 'lucide-react';
-import { Employee, EmployeeInput } from '../types';
+import { Employee, EmployeeInput, FixedDeduction, FixedDeductionInput } from '../types';
+import { FixedDeductionsEditor, FixedDeductionDraft } from './FixedDeductionsEditor';
 import { formatBRL } from '../utils/currency';
 
 interface EmployeeFormProps {
   employee?: Employee;
-  onSave: (data: EmployeeInput) => void;
+  fixedDeductions?: FixedDeduction[];
+  onSave: (data: EmployeeInput, fixed: FixedDeductionInput[]) => Promise<void> | void;
   onCancel: () => void;
 }
 
 export const EmployeeForm: React.FC<EmployeeFormProps> = ({
   employee,
+  fixedDeductions = [],
   onSave,
   onCancel,
 }) => {
@@ -25,6 +28,8 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({
     services: '',
     isActive: true,
   });
+  const [fixedItems, setFixedItems] = useState<FixedDeductionDraft[]>(() =>
+    fixedDeductions.map((d) => ({ ...d, key: d.id, value: String(d.value) })));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submittingRef = useRef(false);
 
@@ -44,13 +49,25 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({
     }
   }, [employee]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submittingRef.current) return;
     if (formData.name && formData.position && formData.department && formData.salary) {
       submittingRef.current = true;
       setIsSubmitting(true);
-      onSave({
+      const fixed: FixedDeductionInput[] = fixedItems.map((d) => ({
+        id: fixedDeductions.some((x) => x.id === d.key) ? d.key : undefined,
+        kind: d.kind,
+        description: d.description.trim(),
+        mode: d.mode,
+        value: parseFloat(d.value) || 0,
+        base: d.base,
+        isActive: d.isActive,
+        startPeriod: d.startPeriod,
+        endPeriod: d.endPeriod || null,
+      }));
+      try {
+        await onSave({
         name: formData.name.trim(),
         position: formData.position.trim(),
         department: formData.department.trim(),
@@ -60,7 +77,11 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({
         overtime: parseFloat(formData.overtime) || 0,
         services: parseFloat(formData.services) || 0,
         isActive: formData.isActive,
-      });
+      }, fixed);
+      } finally {
+        submittingRef.current = false;
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -73,7 +94,7 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto animate-scale-in">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto animate-scale-in">
         <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center space-x-3">
             <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
@@ -185,6 +206,13 @@ export const EmployeeForm: React.FC<EmployeeFormProps> = ({
               </div>
             </div>
           )}
+
+          <FixedDeductionsEditor
+            items={fixedItems}
+            onChange={setFixedItems}
+            salary={parseFloat(formData.salary) || 0}
+            totalSalary={totalSalary}
+          />
 
           <div className="flex space-x-3 pt-4">
             <button
