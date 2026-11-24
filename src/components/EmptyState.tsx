@@ -1,4 +1,3 @@
-import React from 'react';
 import { DollarSign, Plus, Search, Building2, UserPlus } from 'lucide-react';
 
 interface EmptyStateProps {
@@ -65,7 +64,7 @@ export function EmptyState({ type, onAction, actionLabel }: EmptyStateProps) {
           className="btn-primary flex items-center space-x-2"
         >
           {type === 'no-employees' ? <UserPlus size={18} /> : <Plus size={18} />}
-          <span>{config.actionLabel}</span>
+          <span>{actionLabel ?? ('actionLabel' in config ? config.actionLabel : '')}</span>
         </button>
       )}
     </div>

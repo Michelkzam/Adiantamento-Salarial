@@ -39,8 +39,8 @@ function drawDecorativeLine(doc: jsPDF, yPos: number): number {
 export const generateAdvancePDF = (
   record: AdvanceRecord,
   employee: Employee,
-  totalAdvances: number,
-  remainingBalance: number,
+  _totalAdvances: number,
+  _remainingBalance: number,
   customDate?: Date,
   customTime?: string
 ) => {

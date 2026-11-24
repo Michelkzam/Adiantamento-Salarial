@@ -1,4 +1,3 @@
-import React from 'react';
 import { COMPANY } from '../config/company';
 
 export function LoadingScreen() {
