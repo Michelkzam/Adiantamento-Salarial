@@ -84,7 +84,19 @@ let SQL: SqlJsStatic | null = null;
 export class AppDatabase {
   private saving: Promise<void> = Promise.resolve();
 
-  constructor(public db: Database, private storage: StorageAdapter) {}
+  private lastSaved: Uint8Array;
+
+  constructor(public db: Database, private storage: StorageAdapter) {
+    this.lastSaved = db.export();
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+
+  private rollbackToLastSaved(): void {
+    if (!SQL) return;
+    this.db.close();
+    this.db = new SQL.Database(this.lastSaved);
+    this.db.exec('PRAGMA foreign_keys = ON;');
+  }
 
   /** Executa `fn` numa transação e grava o arquivo. Lança erro se a gravação falhar. */
   async write<T>(fn: (db: Database) => T): Promise<T> {
@@ -107,7 +119,9 @@ export class AppDatabase {
     this.saving = this.saving.catch(() => undefined).then(() => this.storage.save(bytes));
     try {
       await this.saving;
+      this.lastSaved = bytes;
     } catch (e) {
+      this.rollbackToLastSaved();
       throw new Error(`Falha ao gravar o banco de dados: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
@@ -121,7 +135,18 @@ export class AppDatabase {
   async replaceWith(bytes: Uint8Array): Promise<void> {
     if (!SQL) throw new Error('Banco não inicializado');
     const next = new SQL.Database(bytes);
-    migrate(next);
+    try {
+      const tables = next.exec("SELECT name FROM sqlite_master WHERE type = 'table'")[0]?.values.flat() ?? [];
+      const version = Number(next.exec('PRAGMA user_version')[0]?.values[0][0] ?? 0);
+      if (version < 1 || !['employees', 'advances', 'payroll_periods'].every((t) => tables.includes(t))) {
+        throw new Error('O arquivo selecionado não é um backup deste sistema.');
+      }
+      migrate(next);
+      if (!getMeta(next, 'legacy_migrated_at')) setMeta(next, 'legacy_migrated_at', new Date().toISOString());
+    } catch (e) {
+      next.close();
+      throw e;
+    }
     this.db.close();
     this.db = next;
     await this.persist();
