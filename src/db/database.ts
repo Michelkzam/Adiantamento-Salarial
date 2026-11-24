@@ -82,7 +82,7 @@ function pickStorage(): StorageAdapter {
 let SQL: SqlJsStatic | null = null;
 
 export class AppDatabase {
-  private saving: Promise<void> = Promise.resolve();
+  private queue: Promise<unknown> = Promise.resolve();
 
   private lastSaved: Uint8Array;
 
@@ -98,27 +98,39 @@ export class AppDatabase {
     this.db.exec('PRAGMA foreign_keys = ON;');
   }
 
-  /** Executa `fn` numa transação e grava o arquivo. Lança erro se a gravação falhar. */
-  async write<T>(fn: (db: Database) => T): Promise<T> {
-    this.db.exec('BEGIN');
-    let result: T;
-    try {
-      result = fn(this.db);
-      this.db.exec('COMMIT');
-    } catch (e) {
-      this.db.exec('ROLLBACK');
-      throw e;
-    }
-    await this.persist();
-    return result;
+  /** Serializa as operações: cada alteração só começa depois que a gravação anterior terminou. */
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.queue.catch(() => undefined).then(task);
+    this.queue = next;
+    return next;
   }
 
-  async persist(): Promise<void> {
+  /** Executa `fn` numa transação e grava o arquivo. Lança erro (e desfaz a alteração) se a gravação falhar. */
+  write<T>(fn: (db: Database) => T): Promise<T> {
+    return this.enqueue(async () => {
+      this.db.exec('BEGIN');
+      let result: T;
+      try {
+        result = fn(this.db);
+        this.db.exec('COMMIT');
+      } catch (e) {
+        this.db.exec('ROLLBACK');
+        throw e;
+      }
+      await this.persistNow();
+      return result;
+    });
+  }
+
+  persist(): Promise<void> {
+    return this.enqueue(() => this.persistNow());
+  }
+
+  private async persistNow(): Promise<void> {
     const bytes = this.db.export();
     this.db.exec('PRAGMA foreign_keys = ON;');
-    this.saving = this.saving.catch(() => undefined).then(() => this.storage.save(bytes));
     try {
-      await this.saving;
+      await this.storage.save(bytes);
       this.lastSaved = bytes;
     } catch (e) {
       this.rollbackToLastSaved();
@@ -132,7 +144,11 @@ export class AppDatabase {
     return bytes;
   }
 
-  async replaceWith(bytes: Uint8Array): Promise<void> {
+  replaceWith(bytes: Uint8Array): Promise<void> {
+    return this.enqueue(() => this.replaceWithNow(bytes));
+  }
+
+  private async replaceWithNow(bytes: Uint8Array): Promise<void> {
     if (!SQL) throw new Error('Banco não inicializado');
     const next = new SQL.Database(bytes);
     try {
@@ -149,7 +165,7 @@ export class AppDatabase {
     }
     this.db.close();
     this.db = next;
-    await this.persist();
+    await this.persistNow();
   }
 }
 
