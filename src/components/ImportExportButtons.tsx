@@ -1,12 +1,13 @@
 import React, { useRef, useState } from 'react';
 import { Download, Upload, FileSpreadsheet, AlertTriangle, CheckCircle, X } from 'lucide-react';
 import { Employee, AdvanceRecord } from '../types';
+import type { ImportResult } from '../db/repository';
 import { exportToExcel, importFromExcel, validateImportedData, generateImportTemplate } from '../utils/excelUtils';
 
 interface ImportExportButtonsProps {
   employees: Employee[];
   advances: AdvanceRecord[];
-  onImportData: (employees: Employee[], advances: AdvanceRecord[]) => void;
+  onImportData: (employees: Employee[], advances: AdvanceRecord[]) => Promise<ImportResult>;
 }
 
 export const ImportExportButtons: React.FC<ImportExportButtonsProps> = ({
@@ -113,14 +114,18 @@ export const ImportExportButtons: React.FC<ImportExportButtonsProps> = ({
         `ATENÇÃO: Esta ação irá SUBSTITUIR todos os dados atuais!`;
 
       if (window.confirm(confirmMessage)) {
-        onImportData(importedEmployees, importedAdvances);
+        const result = await onImportData(importedEmployees, importedAdvances);
+        const skipped = result.skippedClosed;
         setImportStatus({
           show: true,
-          type: 'success',
-          message: 'Dados importados com sucesso!',
+          type: skipped > 0 ? 'error' : 'success',
+          message: skipped > 0 ? 'Importação concluída com lançamentos ignorados' : 'Dados importados com sucesso!',
           details: [
             `${importedEmployees.length} funcionários importados`,
-            `${importedAdvances.length} adiantamentos importados`,
+            `${importedAdvances.length - skipped} adiantamentos importados`,
+            ...(skipped > 0
+              ? [`${skipped} adiantamento(s) NÃO importado(s): pertencem a competências fechadas. Reabra a competência e importe novamente se necessário.`]
+              : []),
             'Todos os dados anteriores foram substituídos',
             'Recomendamos fazer um backup dos dados atuais'
           ]

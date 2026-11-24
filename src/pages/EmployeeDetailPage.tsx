@@ -9,7 +9,9 @@ import { useToast } from '../components/Toast';
 import { Header } from '../components/Header';
 import { AdvanceForm } from '../components/AdvanceForm';
 import { EmptyState } from '../components/EmptyState';
-import { getTotalSalary, getRemainingBalance } from '../utils/salary';
+import { getTotalSalary, getPeriodSummary } from '../utils/salary';
+import { PeriodBar } from '../components/PeriodBar';
+import { formatPeriod } from '../utils/period';
 import { formatBRL } from '../utils/currency';
 import { generateAdvancePDF, generateCompleteReportPDF } from '../utils/pdfGenerator';
 import { AdvanceRecord } from '../types';
@@ -17,7 +19,7 @@ import { AdvanceRecord } from '../types';
 export function EmployeeDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getEmployeeById, getEmployeeAdvances, addAdvance, deleteAdvance, markAdvanceDeducted } = useApp();
+  const { getEmployeeById, getEmployeeAdvances, addAdvance, deleteAdvance, markAdvanceDeducted, selectedPeriod, isPeriodClosed } = useApp();
   const { showToast } = useToast();
 
   const [showAdvanceForm, setShowAdvanceForm] = useState(false);
@@ -36,7 +38,11 @@ export function EmployeeDetailPage() {
   });
 
   const employee = getEmployeeById(id || '');
-  const allAdvances = useMemo(() => (employee ? getEmployeeAdvances(employee.id) : []), [employee, getEmployeeAdvances]);
+  const allAdvances = useMemo(
+    () => (employee ? getEmployeeAdvances(employee.id).filter((a) => a.period === selectedPeriod) : []),
+    [employee, getEmployeeAdvances, selectedPeriod]
+  );
+  const periodClosed = isPeriodClosed(selectedPeriod);
 
   const advances = useMemo(() => {
     return allAdvances.filter((adv) => {
@@ -59,29 +65,39 @@ export function EmployeeDetailPage() {
     );
   }
 
-  const totalAdvances = allAdvances.filter((a) => a.status !== 'deducted').reduce((sum, adv) => sum + adv.amount, 0);
+  const summary = getPeriodSummary(employee, allAdvances);
+  const totalAdvances = summary.used;
   const totalSalary = getTotalSalary(employee);
-  const remainingBalance = getRemainingBalance(employee, allAdvances);
-  const usagePercent = totalSalary > 0 ? (totalAdvances / totalSalary) * 100 : 0;
+  const remainingBalance = summary.remaining;
+  const usagePercent = totalSalary > 0 ? (summary.manual / totalSalary) * 100 : 0;
+  const canAdvance = !periodClosed && summary.maxAdvance > 0;
+  const reportError = (e: unknown) => showToast(e instanceof Error ? e.message : String(e), 'error');
 
   const handleSaveAdvance = async (amount: number, notes: string | undefined, date: string, time: string) => {
     const dateTime = new Date(`${date}T${time}:00`).toISOString();
-    await addAdvance(employee.id, { amount, notes, time, date: dateTime });
-    setShowAdvanceForm(false);
-    showToast('Adiantamento registrado com sucesso!');
+    try {
+      await addAdvance(employee.id, { amount, notes, time, date: dateTime, period: date.slice(0, 7) });
+      setShowAdvanceForm(false);
+      showToast('Adiantamento registrado com sucesso!');
+    } catch (e) {
+      reportError(e);
+      throw e;
+    }
   };
 
   const handleDeleteAdvance = (advanceId: string) => {
     if (window.confirm('Tem certeza que deseja excluir este adiantamento?')) {
-      deleteAdvance(advanceId);
-      showToast('Adiantamento excluído.', 'warning');
+      deleteAdvance(advanceId)
+        .then(() => showToast('Adiantamento excluído.', 'warning'))
+        .catch(reportError);
     }
   };
 
   const handleMarkDeducted = (advanceId: string) => {
     if (window.confirm('Marcar este adiantamento como descontado do salário?')) {
-      markAdvanceDeducted(advanceId);
-      showToast('Adiantamento marcado como descontado.', 'info');
+      markAdvanceDeducted(advanceId)
+        .then(() => showToast('Adiantamento marcado como descontado.', 'info'))
+        .catch(reportError);
     }
   };
 
@@ -117,12 +133,13 @@ export function EmployeeDetailPage() {
       <Header title={`${employee.name} - Adiantamentos`} onBack={() => navigate('/')} showBackButton />
 
       <div className="container mx-auto px-4 py-6">
+        <PeriodBar showAdminActions={false} />
         {/* Employee Info */}
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-md p-6 mb-6 animate-fade-in">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100">Informações do Funcionário</h2>
             <div className="text-right">
-              <p className="text-sm text-gray-500">Total em Adiantamentos</p>
+              <p className="text-sm text-gray-500">Total em Adiantamentos ({formatPeriod(selectedPeriod)})</p>
               <p className="text-2xl font-bold text-red-600">{formatBRL(totalAdvances)}</p>
             </div>
           </div>
@@ -189,7 +206,7 @@ export function EmployeeDetailPage() {
             </div>
             <div className="mt-4">
               <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400 mb-2">
-                <span className="font-medium">Percentual Utilizado (máx. 60%)</span>
+                <span className="font-medium">Adiantamentos avulsos no mês (máx. 60%)</span>
                 <span className="font-bold">{Math.min(100, usagePercent).toFixed(1)}%</span>
               </div>
               <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-3 overflow-hidden">
@@ -209,19 +226,32 @@ export function EmployeeDetailPage() {
 
           <button
             onClick={() => setShowAdvanceForm(true)}
-            disabled={remainingBalance <= 0}
+            disabled={!canAdvance}
             className={`w-full py-3.5 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center space-x-2 transform ${
-              remainingBalance > 0 
+              canAdvance 
                 ? 'btn-success' 
                 : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
             }`}
           >
             <Plus size={20} />
-            <span>{remainingBalance > 0 ? 'Inserir Valor' : 'Saldo Esgotado'}</span>
+            <span>{periodClosed ? 'Competência fechada' : canAdvance ? `Inserir Valor (disponível ${formatBRL(summary.maxAdvance)})` : 'Saldo Esgotado'}</span>
           </button>
-          {remainingBalance <= 0 && (
+          {remainingBalance < 0 && (
+            <div role="alert" className="flex items-start space-x-2 mt-3 p-3 rounded-lg border border-red-300 bg-red-50 text-red-700 dark:bg-red-900/30 dark:border-red-700 dark:text-red-300 text-sm">
+              <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" />
+              <span>
+                Atenção: em {formatPeriod(selectedPeriod)} os adiantamentos (avulsos {formatBRL(summary.manual)} + fixos {formatBRL(summary.fixed)}) passam da remuneração em {formatBRL(Math.abs(remainingBalance))}. Revise os lançamentos ou o valor da pensão.
+              </span>
+            </div>
+          )}
+          {summary.fixed > 0 && (
+            <p className="text-xs text-purple-700 dark:text-purple-300 text-center mt-2">
+              Adiantamentos fixos (pensão) no mês: {formatBRL(summary.fixed)} — não entram no limite de 60%.
+            </p>
+          )}
+          {!periodClosed && !canAdvance && (
             <p className="text-xs text-red-600 dark:text-red-400 text-center mt-2">
-              O funcionário já recebeu o valor máximo permitido (60%)
+              O funcionário já atingiu o valor máximo permitido no mês (60% em avulsos ou remuneração esgotada)
             </p>
           )}
         </div>
@@ -289,6 +319,11 @@ export function EmployeeDetailPage() {
                               <span>Descontado</span>
                             </span>
                           )}
+                          {advance.source === 'fixed' && (
+                            <span className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 px-2.5 py-1 rounded-full font-medium">
+                              Fixo
+                            </span>
+                          )}
                           {advance.status === 'pending' && (
                             <span className="badge-warning">
                               Pendente
@@ -304,7 +339,7 @@ export function EmployeeDetailPage() {
                         )}
                       </div>
                       <div className="flex items-center space-x-1 ml-4">
-                        {advance.status === 'pending' && (
+                        {advance.status === 'pending' && !periodClosed && (
                           <button 
                             onClick={() => handleMarkDeducted(advance.id)} 
                             className="p-2 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-lg transition-all duration-200 transform hover:scale-110" 
@@ -320,13 +355,13 @@ export function EmployeeDetailPage() {
                         >
                           <Download size={18} />
                         </button>
-                        <button 
+                        {!periodClosed && <button 
                           onClick={() => handleDeleteAdvance(advance.id)} 
                           className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-all duration-200 transform hover:scale-110" 
                           title="Excluir"
                         >
                           <Trash2 size={18} />
-                        </button>
+                        </button>}
                       </div>
                     </div>
                   </div>
@@ -353,7 +388,7 @@ export function EmployeeDetailPage() {
       </div>
 
       {showAdvanceForm && (
-        <AdvanceForm employee={employee} currentAdvances={totalAdvances} onSave={handleSaveAdvance} onCancel={() => setShowAdvanceForm(false)} />
+        <AdvanceForm employee={employee} currentAdvances={totalAdvances} maxAdvance={summary.maxAdvance} period={selectedPeriod} onSave={handleSaveAdvance} onCancel={() => setShowAdvanceForm(false)} />
       )}
 
       {pdfDateModal.visible && (

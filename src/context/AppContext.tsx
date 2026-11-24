@@ -1,251 +1,244 @@
-import React, { createContext, useContext, useCallback, useEffect, useState, useRef } from 'react';
-import { Employee, AdvanceRecord, EmployeeInput, AdvanceInput } from '../types';
-import * as db from '../db/repository';
+import React, { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react';
+import type {
+  Employee, AdvanceRecord, EmployeeInput, AdvanceInput, FixedDeduction, FixedDeductionInput,
+  PayrollPeriod, AuditEntry,
+} from '../types';
+import { AppDatabase, openDatabase } from '../db/database';
+import * as repo from '../db/repository';
+import { periodOf } from '../utils/period';
 
 interface AppState {
   employees: Employee[];
   advances: AdvanceRecord[];
+  fixedDeductions: FixedDeduction[];
+  periods: PayrollPeriod[];
   isLoading: boolean;
+  loadError: string | null;
 }
 
 interface AppContextValue extends AppState {
-  addEmployee: (data: EmployeeInput) => Promise<void>;
-  updateEmployee: (id: string, data: EmployeeInput) => Promise<void>;
+  selectedPeriod: string;
+  setSelectedPeriod: (period: string) => void;
+  isPeriodClosed: (period: string) => boolean;
+  /** Retorna as competências abertas em que o total lançado passou da remuneração. */
+  addEmployee: (data: EmployeeInput, fixed?: FixedDeductionInput[]) => Promise<string[]>;
+  updateEmployee: (id: string, data: EmployeeInput, fixed?: FixedDeductionInput[]) => Promise<string[]>;
   deleteEmployee: (id: string) => Promise<void>;
   addAdvance: (employeeId: string, data: AdvanceInput) => Promise<void>;
   deleteAdvance: (id: string) => Promise<void>;
   markAdvanceDeducted: (id: string) => Promise<void>;
-  importData: (employees: Employee[], advances: AdvanceRecord[]) => Promise<void>;
+  closePeriod: (period: string) => Promise<number>;
+  reopenPeriod: (period: string) => Promise<void>;
+  importData: (employees: Employee[], advances: AdvanceRecord[]) => Promise<repo.ImportResult>;
   exportData: () => Promise<{ employees: Employee[]; advances: AdvanceRecord[] }>;
+  backupDatabase: () => Promise<string | null>;
+  restoreDatabase: () => Promise<boolean>;
+  getAuditLog: (limit?: number) => AuditEntry[];
   getEmployeeById: (id: string) => Employee | undefined;
   getEmployeeAdvances: (employeeId: string) => AdvanceRecord[];
+  getEmployeeFixedDeductions: (employeeId: string) => FixedDeduction[];
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
 
-function generateId(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-}
-
-const AUTO_BACKUP_KEY = 'adiantamento_auto_backup';
-const AUTO_BACKUP_INTERVAL = 5 * 60 * 1000;
-
-function autoBackup(employees: Employee[], advances: AdvanceRecord[]) {
-  try {
-    localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify({ employees, advances, timestamp: Date.now() }));
-  } catch { /* silent */ }
-}
-
-function loadAutoBackup(): { employees: Employee[]; advances: AdvanceRecord[] } | null {
-  try {
-    const raw = localStorage.getItem(AUTO_BACKUP_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (data.employees && data.advances) return data;
-  } catch { /* silent */ }
-  return null;
-}
-
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AppState>({
-    employees: [],
-    advances: [],
-    isLoading: true,
+    employees: [], advances: [], fixedDeductions: [], periods: [], isLoading: true, loadError: null,
   });
+  const [selectedPeriod, setSelectedPeriodState] = useState(periodOf());
+  const dbRef = useRef<AppDatabase | null>(null);
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const employees = await db.getAllEmployees();
-        const advances = await db.getAllAdvances();
-
-        const seen = new Set<string>();
-        const dedupedAdvances = advances.filter((adv) => {
-          const key = `${adv.employeeId}-${adv.amount}-${adv.time}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-
-        if (dedupedAdvances.length < advances.length) {
-          await db.replaceAllData(employees, dedupedAdvances);
-        }
-
-        const finalAdvances = dedupedAdvances.length < advances.length ? dedupedAdvances : advances;
-
-        if (employees.length === 0 && finalAdvances.length === 0) {
-          const backup = loadAutoBackup();
-          if (backup) {
-            setState({ employees: backup.employees, advances: backup.advances, isLoading: false });
-            autoBackup(backup.employees, backup.advances);
-            return;
-          }
-        }
-        setState({ employees, advances: finalAdvances, isLoading: false });
-        autoBackup(employees, finalAdvances);
-      } catch (error) {
-        console.error('Erro ao carregar dados:', error);
-        const backup = loadAutoBackup();
-        if (backup) {
-          setState({ employees: backup.employees, advances: backup.advances, isLoading: false });
-        } else {
-          setState({ employees: [], advances: [], isLoading: false });
-        }
-      }
-    }
-    loadData();
-  }, []);
-
-  useEffect(() => {
-    if (!state.isLoading) {
-      autoBackup(state.employees, state.advances);
-    }
-  }, [state.employees, state.advances, state.isLoading]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!state.isLoading) {
-        autoBackup(state.employees, state.advances);
-      }
-    }, AUTO_BACKUP_INTERVAL);
-    return () => clearInterval(interval);
-  }, [state.employees, state.advances, state.isLoading]);
-
-  const addEmployee = useCallback(async (data: EmployeeInput) => {
-    const newEmployee: Employee = {
-      ...data,
-      id: generateId(),
-      createdAt: new Date().toISOString(),
-    };
-    await db.insertEmployee(newEmployee);
-    setState((prev) => ({ ...prev, employees: [...prev.employees, newEmployee] }));
-  }, []);
-
-  const updateEmployee = useCallback(async (id: string, data: EmployeeInput) => {
-    await db.updateEmployee(id, data);
+  const refresh = useCallback(() => {
+    const db = dbRef.current?.db;
+    if (!db) return;
     setState((prev) => ({
       ...prev,
-      employees: prev.employees.map((emp) => (emp.id === id ? { ...emp, ...data } : emp)),
+      employees: repo.listEmployees(db),
+      advances: repo.listAdvances(db),
+      fixedDeductions: repo.listFixedDeductions(db),
+      periods: repo.listPeriods(db),
     }));
   }, []);
+
+  const write = useCallback(async <T,>(fn: Parameters<AppDatabase['write']>[0]): Promise<T> => {
+    const app = dbRef.current;
+    if (!app) throw new Error('Banco de dados ainda não carregado.');
+    try {
+      return (await app.write(fn)) as T;
+    } finally {
+      refresh();
+    }
+  }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const app = await openDatabase();
+        if (cancelled) return;
+        dbRef.current = app;
+        await app.write((db) => repo.ensurePeriod(db, periodOf()));
+        refresh();
+        setState((prev) => ({ ...prev, isLoading: false }));
+      } catch (e) {
+        console.error(e);
+        setState((prev) => ({ ...prev, isLoading: false, loadError: e instanceof Error ? e.message : String(e) }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [refresh]);
+
+  const setSelectedPeriod = useCallback((period: string) => {
+    setSelectedPeriodState(period);
+    if (dbRef.current) {
+      write((db) => repo.ensurePeriod(db, period)).catch((e) => console.error(e));
+    }
+  }, [write]);
+
+  const isPeriodClosed = useCallback(
+    (period: string) => state.periods.some((p) => p.yearMonth === period && p.status === 'closed'),
+    [state.periods],
+  );
+
+  const addEmployee = useCallback(async (data: EmployeeInput, fixed: FixedDeductionInput[] = []) => {
+    return write<string[]>((db) => repo.overcommittedPeriods(db, repo.createEmployee(db, data, fixed).id));
+  }, [write]);
+
+  const updateEmployee = useCallback(async (id: string, data: EmployeeInput, fixed?: FixedDeductionInput[]) => {
+    return write<string[]>((db) => {
+      repo.updateEmployee(db, id, data, fixed);
+      return repo.overcommittedPeriods(db, id);
+    });
+  }, [write]);
 
   const deleteEmployee = useCallback(async (id: string) => {
-    await db.deleteEmployee(id);
-    setState((prev) => ({
-      ...prev,
-      employees: prev.employees.filter((emp) => emp.id !== id),
-      advances: prev.advances.filter((adv) => adv.employeeId !== id),
-    }));
-  }, []);
-
-  const advanceIdempotencyRef = useRef<Set<string>>(new Set());
+    await write((db) => repo.deleteEmployee(db, id));
+  }, [write]);
 
   const addAdvance = useCallback(async (employeeId: string, data: AdvanceInput) => {
-    const key = `${employeeId}-${data.amount}`;
-    if (advanceIdempotencyRef.current.has(key)) return;
-    advanceIdempotencyRef.current.add(key);
-
-    try {
-      const currentEmployees = await db.getAllEmployees();
-      const employee = currentEmployees.find((emp) => emp.id === employeeId);
-      if (!employee) {
-        advanceIdempotencyRef.current.delete(key);
-        return;
-      }
-
-      const advanceDate = data.date || new Date().toISOString();
-      const currentAdvances = await db.getAllAdvances();
-      const duplicateExists = currentAdvances.some(
-        (a) =>
-          a.employeeId === employeeId &&
-          a.amount === data.amount &&
-          a.time === data.time &&
-          a.date.slice(0, 10) === advanceDate.slice(0, 10)
-      );
-      if (duplicateExists) {
-        advanceIdempotencyRef.current.delete(key);
-        return;
-      }
-
-      const newAdvance: AdvanceRecord = {
-        ...data,
-        id: generateId(),
-        employeeId,
-        employeeName: employee.name,
-        date: advanceDate,
-        status: 'pending',
-      };
-      await db.insertAdvance(newAdvance);
-      setState((prev) => ({ ...prev, advances: [...prev.advances, newAdvance] }));
-    } finally {
-      setTimeout(() => advanceIdempotencyRef.current.delete(key), 3000);
-    }
-  }, []);
+    await write((db) => repo.createAdvance(db, employeeId, data));
+  }, [write]);
 
   const deleteAdvance = useCallback(async (id: string) => {
-    await db.deleteAdvance(id);
-    setState((prev) => ({
-      ...prev,
-      advances: prev.advances.filter((adv) => adv.id !== id),
-    }));
-  }, []);
+    await write((db) => repo.deleteAdvance(db, id));
+  }, [write]);
 
   const markAdvanceDeducted = useCallback(async (id: string) => {
-    await db.updateAdvanceStatus(id, 'deducted');
-    setState((prev) => ({
-      ...prev,
-      advances: prev.advances.map((adv) =>
-        adv.id === id ? { ...adv, status: 'deducted' as const } : adv
-      ),
-    }));
-  }, []);
+    await write((db) => repo.markAdvanceDeducted(db, id));
+  }, [write]);
+
+  const closePeriod = useCallback(
+    (period: string) => write<number>((db) => repo.closePeriod(db, period)),
+    [write],
+  );
+
+  const reopenPeriod = useCallback(async (period: string) => {
+    await write((db) => repo.reopenPeriod(db, period));
+  }, [write]);
 
   const importData = useCallback(async (employees: Employee[], advances: AdvanceRecord[]) => {
-    await db.importAllData(employees, advances);
-    setState({ employees, advances, isLoading: false });
+    return write<repo.ImportResult>((db) => repo.replaceWithImported(db, { employees, advances }));
+  }, [write]);
+
+  const exportData = useCallback(async () => ({ employees: state.employees, advances: state.advances }),
+    [state.employees, state.advances]);
+
+  const backupDatabase = useCallback(async () => {
+    const app = dbRef.current;
+    if (!app) return null;
+    const bytes = app.exportBytes();
+    if (window.electronAPI?.dbExport) {
+      const res = await window.electronAPI.dbExport(bytes);
+      if (!res.success && !res.canceled) throw new Error(res.error || 'Falha ao salvar backup');
+      return res.success ? res.filePath ?? '' : null;
+    }
+    const name = `backup_adiantamentos_${new Date().toISOString().slice(0, 10)}.sqlite`;
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.sqlite3' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+    return name;
   }, []);
 
-  const exportData = useCallback(async () => {
-    return db.exportAllData();
-  }, []);
+  const restoreDatabase = useCallback(async () => {
+    const app = dbRef.current;
+    if (!app) return false;
+    let bytes: Uint8Array | null = null;
+    if (window.electronAPI?.dbImport) {
+      bytes = await window.electronAPI.dbImport();
+    } else {
+      bytes = await new Promise<Uint8Array | null>((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.sqlite,.db';
+        input.onchange = async () => {
+          const file = input.files?.[0];
+          resolve(file ? new Uint8Array(await file.arrayBuffer()) : null);
+        };
+        input.click();
+      });
+    }
+    if (!bytes) return false;
+    await app.replaceWith(bytes);
+    await app.write((db) => {
+      repo.audit(db, 'db.restore', 'database', null, 'Banco de dados restaurado a partir de backup');
+      repo.ensurePeriod(db, periodOf());
+    });
+    refresh();
+    return true;
+  }, [refresh]);
+
+  const getAuditLog = useCallback((limit = 500) => {
+    const db = dbRef.current?.db;
+    return db ? repo.listAudit(db, limit) : [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
 
   const getEmployeeById = useCallback(
     (id: string) => state.employees.find((emp) => emp.id === id),
-    [state.employees]
+    [state.employees],
   );
 
   const getEmployeeAdvances = useCallback(
-    (employeeId: string) =>
-      state.advances
-        .filter((adv) => adv.employeeId === employeeId)
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
-    [state.advances]
+    (employeeId: string) => state.advances.filter((adv) => adv.employeeId === employeeId),
+    [state.advances],
+  );
+
+  const getEmployeeFixedDeductions = useCallback(
+    (employeeId: string) => state.fixedDeductions.filter((d) => d.employeeId === employeeId),
+    [state.fixedDeductions],
   );
 
   const value: AppContextValue = {
     ...state,
-    addEmployee,
-    updateEmployee,
-    deleteEmployee,
-    addAdvance,
-    deleteAdvance,
-    markAdvanceDeducted,
-    importData,
-    exportData,
-    getEmployeeById,
-    getEmployeeAdvances,
+    selectedPeriod, setSelectedPeriod, isPeriodClosed,
+    addEmployee, updateEmployee, deleteEmployee,
+    addAdvance, deleteAdvance, markAdvanceDeducted,
+    closePeriod, reopenPeriod,
+    importData, exportData, backupDatabase, restoreDatabase, getAuditLog,
+    getEmployeeById, getEmployeeAdvances, getEmployeeFixedDeductions,
   };
+
+  if (state.loadError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <div className="max-w-lg bg-red-50 border border-red-200 rounded-xl p-6 text-red-800">
+          <h1 className="text-lg font-semibold mb-2">Não foi possível abrir o banco de dados</h1>
+          <p className="text-sm">{state.loadError}</p>
+          <p className="text-sm mt-2">Nenhum dado foi apagado. Feche o aplicativo e entre em contato com o suporte.</p>
+        </div>
+      </div>
+    );
+  }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useApp(): AppContextValue {
-  const context = useContext(AppContext);
-  if (!context) {
-    throw new Error('useApp must be used within an AppProvider');
-  }
-  return context;
+  const ctx = useContext(AppContext);
+  if (!ctx) throw new Error('useApp must be used within AppProvider');
+  return ctx;
 }

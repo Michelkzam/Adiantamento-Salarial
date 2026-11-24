@@ -29,7 +29,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, 300);
-    }, 3500);
+    }, type === 'warning' || type === 'error' ? 8000 : 3500);
   }, []);
 
   const dismiss = (id: string) => {

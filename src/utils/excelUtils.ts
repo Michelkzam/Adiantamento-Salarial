@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { periodOf } from './period';
 import { Employee, AdvanceRecord } from '../types';
 import { getTotalSalary } from './salary';
 
@@ -30,7 +31,8 @@ export const exportToExcel = (employees: Employee[], advances: AdvanceRecord[]) 
       'Saldo Restante (R$)': remainingBalance,
       'Qtd. Adiantamentos': employeeAdvances.length,
       'Data de Cadastro': new Date(employee.createdAt).toLocaleDateString('pt-BR'),
-      'Status': remainingBalance >= 0 ? 'Regular' : 'Saldo Negativo'
+      'Status': remainingBalance >= 0 ? 'Regular' : 'Saldo Negativo',
+      'Situação': employee.isActive === false ? 'Inativo' : 'Ativo'
     };
   });
   
@@ -47,6 +49,9 @@ export const exportToExcel = (employees: Employee[], advances: AdvanceRecord[]) 
       'Data': new Date(advance.date).toLocaleDateString('pt-BR'),
       'Horário': advance.time,
       'Observações': advance.notes || '',
+      'Competência': advance.period,
+      'Tipo': advance.source === 'fixed' ? 'Fixo' : 'Avulso',
+      'Status': advance.status === 'deducted' ? 'Descontado' : 'Pendente',
       'Mês/Ano': new Date(advance.date).toLocaleDateString('pt-BR', { month: '2-digit', year: 'numeric' })
     };
   });
@@ -137,68 +142,84 @@ export const exportToExcel = (employees: Employee[], advances: AdvanceRecord[]) 
   return fileName;
 };
 
+type SheetRow = Record<string, unknown>;
+
+const str = (v: unknown, fallback = ''): string => (v == null || v === '' ? fallback : String(v));
+const num = (v: unknown): number => {
+  if (typeof v === 'number') return v;
+  const n = parseFloat(str(v).replace(/\./g, '').replace(',', '.'));
+  return Number.isFinite(n) ? n : 0;
+};
+const brDate = (v: unknown): string => {
+  if (v instanceof Date) return v.toISOString();
+  const text = str(v);
+  const m = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12).toISOString();
+  const d = text ? new Date(text) : new Date();
+  return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+};
+
 // Função para importar dados do Excel
 export const importFromExcel = (file: File): Promise<{ employees: Employee[], advances: AdvanceRecord[] }> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    
+
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        
+
         let employees: Employee[] = [];
         let advances: AdvanceRecord[] = [];
-        
-        // Ler planilha de funcionários
+
         if (workbook.SheetNames.includes('Funcionários')) {
-          const employeesSheet = workbook.Sheets['Funcionários'];
-          const employeesData = XLSX.utils.sheet_to_json(employeesSheet);
-          
-          employees = employeesData.map((row: Record<string, unknown>) => ({
-            id: row['ID'] || crypto.randomUUID(),
-            name: row['Nome Completo'] || '',
-            position: row['Cargo'] || '',
-            department: row['Departamento'] || '',
-            salary: parseFloat(row['Salário Base (R$)']) || 0,
-            foodAllowance: parseFloat(row['Vale Alimentação (R$)']) || 0,
-            transportAllowance: parseFloat(row['Vale Transporte (R$)']) || 0,
-            overtime: parseFloat(row['Horas Extras (R$)']) || 0,
-            services: parseFloat(row['Serviços Prestados (R$)']) || 0,
-            createdAt: row['Data de Cadastro'] ? 
-              new Date(row['Data de Cadastro'].split('/').reverse().join('-')) : 
-              new Date()
+          const rows = XLSX.utils.sheet_to_json<SheetRow>(workbook.Sheets['Funcionários']);
+          employees = rows.map((row) => ({
+            id: str(row['ID']) || crypto.randomUUID(),
+            name: str(row['Nome Completo']),
+            position: str(row['Cargo']),
+            department: str(row['Departamento']),
+            salary: num(row['Salário Base (R$)']),
+            foodAllowance: num(row['Vale Alimentação (R$)']),
+            transportAllowance: num(row['Vale Transporte (R$)']),
+            overtime: num(row['Horas Extras (R$)']),
+            services: num(row['Serviços Prestados (R$)']),
+            isActive: str(row['Situação']).toLowerCase() !== 'inativo',
+            createdAt: brDate(row['Data de Cadastro']),
           }));
         }
-        
-        // Ler planilha de adiantamentos
+
         if (workbook.SheetNames.includes('Adiantamentos')) {
-          const advancesSheet = workbook.Sheets['Adiantamentos'];
-          const advancesData = XLSX.utils.sheet_to_json(advancesSheet);
-          
-          advances = advancesData.map((row: Record<string, unknown>) => ({
-            id: row['ID Adiantamento'] || crypto.randomUUID(),
-            employeeId: row['ID Funcionário'] || '',
-            employeeName: row['Nome Funcionário'] || '',
-            amount: parseFloat(row['Valor (R$)']) || 0,
-            date: row['Data'] ? 
-              new Date(row['Data'].split('/').reverse().join('-')) : 
-              new Date(),
-            time: row['Horário'] || new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-            notes: row['Observações'] || undefined
-          }));
+          const rows = XLSX.utils.sheet_to_json<SheetRow>(workbook.Sheets['Adiantamentos']);
+          advances = rows
+            .filter((row) => str(row['Tipo']) !== 'Fixo')
+            .map((row) => {
+              const date = brDate(row['Data']);
+              return {
+                id: str(row['ID Adiantamento']) || crypto.randomUUID(),
+                employeeId: str(row['ID Funcionário']),
+                employeeName: str(row['Nome Funcionário']),
+                amount: num(row['Valor (R$)']),
+                date,
+                time: str(row['Horário'], '00:00'),
+                notes: str(row['Observações']) || undefined,
+                status: str(row['Status']) === 'Descontado' ? 'deducted' : 'pending',
+                period: /^\d{4}-\d{2}$/.test(str(row['Competência'])) ? str(row['Competência']) : periodOf(date),
+                source: 'manual',
+              };
+            });
         }
-        
+
         resolve({ employees, advances });
       } catch {
         reject(new Error('Erro ao processar arquivo Excel. Verifique se o formato está correto.'));
       }
     };
-    
+
     reader.onerror = () => {
       reject(new Error('Erro ao ler arquivo.'));
     };
-    
+
     reader.readAsArrayBuffer(file);
   });
 };
