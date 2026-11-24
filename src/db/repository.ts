@@ -528,5 +528,7 @@ export function replaceWithImported(db: Database, payload: ImportPayload): { emp
     run(db, 'UPDATE advances SET amount_cents=?, status=?, notes=?, deleted_at=NULL, updated_at=? WHERE id=?',
       [amount, a.status === 'deducted' ? 'deducted' : 'pending', a.notes ? String(a.notes) : null, ts, String(a.id)]);
   }
-  return insertImported(db, payload, 'data.import_excel', 'Importação Excel (substituição)');
+  const result = insertImported(db, payload, 'data.import_excel', 'Importação Excel (substituição)');
+  for (const r of all(db, 'SELECT id FROM employees')) syncFixedForEmployee(db, String(r.id));
+  return result;
 }

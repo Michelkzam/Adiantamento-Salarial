@@ -170,3 +170,13 @@ describe('pensão acima da remuneração', () => {
     expect(repo.overcommittedPeriods(db, e.id)).toEqual([]);
   });
 });
+
+describe('importação Excel recalcula pensão', () => {
+  it('atualiza pensão percentual pendente quando o salário muda', () => {
+    const e = repo.createEmployee(db, base, [pension()]);
+    repo.ensurePeriod(db, '2026-01');
+    repo.replaceWithImported(db, { employees: [{ ...repo.getEmployee(db, e.id)!, salary: 3000 }], advances: [] });
+    const fixed = repo.listAdvances(db).filter((a) => a.source === 'fixed' && a.period === '2026-01');
+    expect(fixed.map((a) => a.amount)).toEqual([900]);
+  });
+});
