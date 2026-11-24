@@ -582,7 +582,7 @@ export function DashboardPage() {
 
       {showReportFilter && (
         <ReportFilterModal
-          employees={employees}
+          employees={periodEmployees}
           onGenerate={handleGenerateSelectedReport}
           onCancel={() => setShowReportFilter(false)}
         />
